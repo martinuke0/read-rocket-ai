@@ -13,9 +13,13 @@ import {
   Sparkles,
   Upload,
   Moon,
-  Sun
+  Sun,
+  Loader2
 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
+import { generateContent } from "@/services/openai";
+import { statsService } from "@/services/stats";
+import type { ReadingStats } from "@/services/stats";
 
 const Reader = () => {
   const [text, setText] = useState("");
@@ -25,9 +29,59 @@ const Reader = () => {
   const [wpm, setWpm] = useState(250);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [customPrompt, setCustomPrompt] = useState("");
+  const [stats, setStats] = useState<ReadingStats>({
+    totalSessions: 0,
+    totalWordsRead: 0,
+    averageWpm: 0,
+    averageQuizScore: 0
+  });
 
-  // Sample text for demo
-  const sampleText = "Welcome to SpeedRead AI! This revolutionary application uses RSVP (Rapid Serial Visual Presentation) techniques to help you read faster and comprehend better. Start by pasting your text, uploading a PDF, or generating AI content. Then adjust your reading speed and enjoy the enhanced reading experience with AI-powered comprehension tracking.";
+  // Load stats on mount
+  useEffect(() => {
+    loadStats();
+  }, []);
+
+  const loadStats = async () => {
+    const newStats = await statsService.getStats();
+    setStats(newStats);
+  };
+
+  // Random prompts for variety
+  const randomPrompts = [
+    "Write an engaging article about the psychology of learning and memory retention.",
+    "Create a story about a person who discovers they can read minds through speed reading.",
+    "Explain the evolution of reading techniques throughout human history.",
+    "Discuss how technology is changing the way we consume written content.",
+    "Write about the connection between reading speed and comprehension.",
+    "Describe the future of reading in the digital age.",
+    "Share tips for improving focus and concentration while reading.",
+  ];
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (isPlaying && currentWordIndex < words.length) {
+      interval = setInterval(async () => {
+        setCurrentWordIndex(prev => {
+          const nextIndex = prev + 1;
+          // Update progress for the current word
+          statsService.updateProgress(nextIndex, wpm);
+          
+          if (nextIndex >= words.length) {
+            setIsPlaying(false);
+            // End session when reading completes and refresh stats
+            statsService.endSession().then(() => {
+              loadStats(); // Refresh stats after session ends
+            });
+            return prev; // Keep the last word
+          }
+          return nextIndex;
+        });
+      }, 60000 / wpm);
+    }
+    return () => clearInterval(interval);
+  }, [isPlaying, wpm, currentWordIndex, words.length]);
 
   useEffect(() => {
     if (text) {
@@ -35,30 +89,21 @@ const Reader = () => {
       setWords(wordArray);
       setCurrentWordIndex(0);
       setProgress(0);
+      // Start new session when text changes and refresh stats
+      statsService.startSession(text).then(() => {
+        loadStats(); // Refresh stats after new session starts
+      });
     }
   }, [text]);
 
   useEffect(() => {
-    setProgress(words.length > 0 ? (currentWordIndex / words.length) * 100 : 0);
+    const progress = words.length > 0 
+      ? ((currentWordIndex + 1) / words.length) * 100 
+      : 0;
+    setProgress(Math.min(progress, 100)); // Ensure progress doesn't exceed 100%
   }, [currentWordIndex, words.length]);
 
-  useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (isPlaying && currentWordIndex < words.length) {
-      interval = setInterval(() => {
-        setCurrentWordIndex(prev => {
-          if (prev >= words.length - 1) {
-            setIsPlaying(false);
-            return prev;
-          }
-          return prev + 1;
-        });
-      }, 60000 / wpm);
-    }
-    return () => clearInterval(interval);
-  }, [isPlaying, wpm, currentWordIndex, words.length]);
-
-  const handlePlay = () => {
+  const handlePlay = async () => {
     if (words.length === 0) {
       toast({
         title: "No text to read",
@@ -67,9 +112,16 @@ const Reader = () => {
       });
       return;
     }
+    
+    // If we're at the end, start a new session
     if (currentWordIndex >= words.length - 1) {
       setCurrentWordIndex(0);
+      // End previous session and start a new one
+      await statsService.endSession();
+      await statsService.startSession(text);
+      await loadStats(); // Refresh stats after session changes
     }
+    
     setIsPlaying(true);
   };
 
@@ -77,25 +129,44 @@ const Reader = () => {
     setIsPlaying(false);
   };
 
-  const handleReset = () => {
+  const handleReset = async () => {
     setIsPlaying(false);
     setCurrentWordIndex(0);
+    // End current session if exists and start a new one
+    await statsService.endSession();
+    await statsService.startSession(text);
+    await loadStats(); // Refresh stats after session changes
   };
 
-  const loadSample = () => {
-    setText(sampleText);
-    toast({
-      title: "Sample text loaded",
-      description: "Ready to start speed reading!"
-    });
+  const getRandomPrompt = () => {
+    const randomIndex = Math.floor(Math.random() * randomPrompts.length);
+    return randomPrompts[randomIndex];
   };
 
-  const generateAIContent = () => {
-    toast({
-      title: "AI Content Generation",
-      description: "Connect to OpenAI API to generate content. Feature coming soon!",
-      variant: "destructive"
-    });
+  const generateAIContent = async () => {
+    try {
+      setIsGenerating(true);
+      setText(""); // Clear existing text
+      const prompt = customPrompt.trim() || getRandomPrompt();
+      setCustomPrompt(""); // Clear the custom prompt
+      
+      await generateContent(prompt, (chunk) => {
+        setText(prev => prev + chunk); // Append each chunk to the text
+      });
+
+      toast({
+        title: "AI Content Generated",
+        description: "New content has been generated and loaded.",
+      });
+    } catch (error) {
+      toast({
+        title: "Error Generating Content",
+        description: "Please check your OpenAI API key and try again.",
+        variant: "destructive"
+      });
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   const uploadPDF = () => {
@@ -104,6 +175,19 @@ const Reader = () => {
       description: "PDF processing feature coming soon!",
       variant: "destructive"
     });
+  };
+
+  const handlePromptChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const words = e.target.value.trim().split(/\s+/);
+    if (words.length > 1000) {
+      toast({
+        title: "Word Limit Exceeded",
+        description: "Please keep your prompt under 1000 words.",
+        variant: "destructive"
+      });
+      return;
+    }
+    setCustomPrompt(e.target.value);
   };
 
   const currentWord = words[currentWordIndex] || "";
@@ -142,19 +226,37 @@ const Reader = () => {
               
               <div className="space-y-4">
                 <Textarea
-                  placeholder="Paste your text here to start speed reading..."
+                  placeholder="Read me..."
                   value={text}
                   onChange={(e) => setText(e.target.value)}
                   className="min-h-[150px] resize-none"
                 />
                 
+                <Textarea
+                  placeholder="Describe the story you want to read (leave empty for random story)..."
+                  value={customPrompt}
+                  onChange={handlePromptChange}
+                  className="min-h-[80px] resize-none"
+                />
+
                 <div className="flex gap-2">
-                  <Button onClick={loadSample} variant="outline" size="sm">
-                    Load Sample
-                  </Button>
-                  <Button onClick={generateAIContent} variant="reader" size="sm">
-                    <Sparkles className="h-4 w-4" />
-                    AI Generate
+                  <Button 
+                    onClick={generateAIContent} 
+                    variant="reader" 
+                    size="sm"
+                    disabled={isGenerating}
+                  >
+                    {isGenerating ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                        Generating...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="h-4 w-4 mr-2" />
+                        AI Generate
+                      </>
+                    )}
                   </Button>
                   <Button onClick={uploadPDF} variant="outline" size="sm">
                     <Upload className="h-4 w-4" />
@@ -263,19 +365,19 @@ const Reader = () => {
         {/* Stats Footer */}
         <div className="mt-8 grid md:grid-cols-4 gap-4">
           <Card className="p-4 text-center">
-            <div className="text-2xl font-bold text-primary">0</div>
+            <div className="text-2xl font-bold text-primary">{stats.totalSessions}</div>
             <div className="text-sm text-muted-foreground">Sessions</div>
           </Card>
           <Card className="p-4 text-center">
-            <div className="text-2xl font-bold text-primary">0</div>
+            <div className="text-2xl font-bold text-primary">{stats.totalWordsRead}</div>
             <div className="text-sm text-muted-foreground">Words Read</div>
           </Card>
           <Card className="p-4 text-center">
-            <div className="text-2xl font-bold text-primary">{wpm}</div>
+            <div className="text-2xl font-bold text-primary">{stats.averageWpm}</div>
             <div className="text-sm text-muted-foreground">Avg WPM</div>
           </Card>
           <Card className="p-4 text-center">
-            <div className="text-2xl font-bold text-primary">0</div>
+            <div className="text-2xl font-bold text-primary">{stats.averageQuizScore}%</div>
             <div className="text-sm text-muted-foreground">Quiz Score</div>
           </Card>
         </div>
