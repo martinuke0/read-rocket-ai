@@ -20,6 +20,7 @@ class StatsService {
       // Calculate total words in text
       const totalWords = textContent.trim().split(/\s+/).length;
       console.log('Total words in text:', totalWords);
+      console.log('Supabase URL:', import.meta.env.VITE_SUPABASE_URL);
       
       // Reset tracking variables
       this.wordCount = 0;
@@ -37,7 +38,14 @@ class StatsService {
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) {
+        console.error('Supabase error details:', {
+          message: error.message,
+          details: error.details,
+          hint: error.hint
+        });
+        throw error;
+      }
       console.log('Session started successfully:', data);
       this.currentSession = data;
     } catch (error) {

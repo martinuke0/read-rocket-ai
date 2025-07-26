@@ -93,13 +93,19 @@ const Reader = () => {
       statsService.startSession(text).then(() => {
         loadStats(); // Refresh stats after new session starts
       });
+    } else {
+      setWords([]);
+      setCurrentWordIndex(0);
+      setProgress(0);
     }
   }, [text]);
 
   useEffect(() => {
-    const progress = words.length > 0 
-      ? ((currentWordIndex + 1) / words.length) * 100 
-      : 0;
+    if (words.length === 0) {
+      setProgress(0);
+      return;
+    }
+    const progress = ((currentWordIndex + 1) / words.length) * 100;
     setProgress(Math.min(progress, 100)); // Ensure progress doesn't exceed 100%
   }, [currentWordIndex, words.length]);
 
@@ -304,7 +310,7 @@ const Reader = () => {
                     ) : (
                       <>
                         <Play className="h-4 w-4" />
-                        Play
+                        Read
                       </>
                     )}
                   </Button>
@@ -321,8 +327,19 @@ const Reader = () => {
               <h3 className="text-lg font-semibold mb-4">Progress</h3>
               <div className="space-y-2">
                 <div className="flex justify-between text-sm">
-                  <span>Word {currentWordIndex + 1} of {words.length}</span>
-                  <span>{Math.round(progress)}%</span>
+                  <span>
+                    {words.length > 0 
+                      ? `Word ${currentWordIndex + 1} of ${words.length}`
+                      : 'Waiting for text...'
+                    }
+                  </span>
+                  <span>
+                    {words.length > 0 
+                        ? Math.round(progress) + '%'
+                        : ''
+                      }
+                    
+                    </span>
                 </div>
                 <div className="w-full bg-secondary rounded-full h-2">
                   <div 
